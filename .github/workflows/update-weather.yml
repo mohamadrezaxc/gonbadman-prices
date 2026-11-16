@@ -1,0 +1,31 @@
+name: Update Weather
+
+on:
+  schedule:
+    - cron: '*/15 * * * *' # هر ۱۵ دقیقه یک‌بار اجرا می‌شود
+  workflow_dispatch: # اجازه می‌دهد دستی هم اجرا کنی
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+        
+      - name: Run script
+        run: python update_weather.py
+        
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update weather data"
+          file_pattern: weather.json
