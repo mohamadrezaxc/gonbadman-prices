@@ -5,75 +5,110 @@ from playwright.async_api import async_playwright
 
 async def fetch_weather():
     async with async_playwright() as p:
-        # اجرای مرورگر به صورت Headless (بدون رابط گرافیکی)
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
         
         try:
-            # رفتن به سایت و صبر کردن تا لود کامل شود
-            await page.goto("https://www.golestanmet.ir/", timeout=30000, wait_until="networkidle")
+            print("در حال باز کردن سایت هواشناسی...")
+            await page.goto("https://www.golestanmet.ir/", timeout=60000, wait_until="networkidle")
             
-            # صبر برای اینکه عناصر اصلی حتماً لود شوند
+            # صبر اولیه برای لود شدن صفحه
+            await page.wait_for_timeout(3000)
+            
+            # --- تلاش برای انتخاب شهر گنبدکاووس ---
+            print("در حال تلاش برای انتخاب گنبدکاووس...")
+            try:
+                # روش ۱: کلیک روی لینک یا دکمه‌ای که متن گنبدکاووس دارد
+                # (اگر در سایت گزینه‌ای برای انتخاب شهر وجود داشته باشد)
+                await page.click('text=گنبدکاووس', timeout=5000)
+                print("با کلیک روی متن گنبدکاووس انتخاب شد.")
+            except:
+                print("کلیک مستقیم ممکن نبود. تلاش برای تغییر هش آدرس...")
+                # روش ۲: تغییر هش آدرس به صورت دستی
+                await page.evaluate("window.location.hash = '#gonbad-e-kavus';")
+                # تلاش برای ریلود کردن با هش جدید
+                await page.reload(wait_until="networkidle")
+            
+            # صبر طولانی‌تر برای اینکه اطلاعات گنبدکاووس جایگزین گرگان شود
+            print("در حال صبر برای بارگذاری کامل اطلاعات...")
             await page.wait_for_timeout(5000)
             
+            # --- استخراج اطلاعات ---
             weather_data = {}
             
-            # استخراج داده‌ها با استفاده از JavaScript درون صفحه
-            weather_data['headline'] = await page.evaluate('''
-                () => {
-                    const el = document.querySelector('.headline');
-                    if (!el) return "—";
-                    const spans = el.querySelectorAll('span');
-                    if (spans.length >= 2) return spans[0].innerText.trim() + " | " + spans[1].innerText.trim();
-                    return el.innerText.trim();
-                }
-            ''')
+            # 1. عنوان
+            headline_el = page.locator('.headline')
+            if await headline_el.count() > 0:
+                spans = headline_el.locator('span')
+                if await spans.count() >= 2:
+                    part1 = await spans.nth(0).inner_text()
+                    part2 = await spans.nth(1).inner_text()
+                    weather_data['headline'] = f"{part1.strip()} | {part2.strip()}"
+                else:
+                    weather_data['headline'] = (await headline_el.inner_text()).strip()
+            else:
+                weather_data['headline'] = "—"
             
-            weather_data['lede'] = await page.evaluate('''
-                () => {
-                    const el = document.querySelector('.lede');
-                    return el ? el.innerText.trim() : "در حال دریافت اطلاعات…";
-                }
-            ''')
+            # 2. توضیحات (Lede)
+            lede_el = page.locator('.lede')
+            if await lede_el.count() > 0:
+                weather_data['lede'] = (await lede_el.inner_text()).strip()
+            else:
+                weather_data['lede'] = "—"
             
-            weather_data['temp'] = await page.evaluate('''
-                () => {
-                    const el = document.querySelector('#nowT') || document.querySelector('.now-t .num');
-                    return el ? el.innerText.trim() : "0";
-                }
-            ''')
+            # 3. دمای فعلی
+            temp_el = page.locator('#nowT, .now-t .num')
+            if await temp_el.count() > 0:
+                weather_data['temp'] = (await temp_el.first.inner_text()).strip()
+            else:
+                weather_data['temp'] = "0"
             
-            weather_data['feelsLike'] = await page.evaluate('''
-                () => {
-                    const el = document.querySelector('#nowF');
-                    return el ? el.innerText.trim() : "—";
-                }
-            ''')
+            # 4. احساس دما
+            feels_el = page.locator('#nowF')
+            if await feels_el.count() > 0:
+                weather_data['feelsLike'] = (await feels_el.inner_text()).strip()
+            else:
+                weather_data['feelsLike'] = "—"
             
-            weather_data['condition'] = await page.evaluate('''
-                () => {
-                    const el = document.querySelector('#nowC');
-                    return el ? el.innerText.trim() : "—";
-                }
-            ''')
+            # 5. وضعیت هوا
+            cond_el = page.locator('#nowC')
+            if await cond_el.count() > 0:
+                weather_data['condition'] = (await cond_el.inner_text()).strip()
+            else:
+                weather_data['condition'] = "—"
             
-            weather_data['icon'] = await page.evaluate('''
-                () => {
-                    const el = document.querySelector('#nowI');
-                    return el ? el.src : "https://www.golestanmet.ir/wp-content/plugins/glm-portal/site/icons/cloud.png";
-                }
-            ''')
+            # 6. آیکون
+            icon_el = page.locator('#nowI')
+            if await icon_el.count() > 0:
+                src = await icon_el.get_attribute('src')
+                if src:
+                    if src.startswith('/'):
+                        weather_data['icon'] = f"https://www.golestanmet.ir{src}"
+                    elif not src.startswith('http'):
+                        weather_data['icon'] = f"https://www.golestanmet.ir/{src}"
+                    else:
+                        weather_data['icon'] = src
+                else:
+                    weather_data['icon'] = "https://www.golestanmet.ir/wp-content/plugins/glm-portal/site/icons/cloud.png"
+            else:
+                weather_data['icon'] = "https://www.golestanmet.ir/wp-content/plugins/glm-portal/site/icons/cloud.png"
             
             weather_data['last_update'] = datetime.now().isoformat()
             
-            # ذخیره در فایل JSON
+            # ذخیره
             with open('weather.json', 'w', encoding='utf-8') as f:
                 json.dump(weather_data, f, ensure_ascii=False, indent=2)
             
-            print("اطلاعات هوا با موفقیت استخراج شد:", weather_data)
+            print("اطلاعات با موفقیت استخراج شد:", weather_data)
+            
+            # چک نهایی: آیا شهر گنبدکاووس است؟
+            if "گنبد" in weather_data.get('lede', ''):
+                print("✅ تایید: اطلاعات گنبدکاووس است.")
+            else:
+                print("⚠️ هشدار: احتمالاً اطلاعات گرگان است.")
             
         except Exception as e:
-            print(f"خطا در استخراج اطلاعات: {e}")
+            print(f"خطا در استخراج: {e}")
             raise
         finally:
             await browser.close()
