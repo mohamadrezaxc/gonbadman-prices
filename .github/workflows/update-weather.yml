@@ -2,8 +2,8 @@ name: Update Weather
 
 on:
   schedule:
-    - cron: '*/15 * * * *' # هر ۱۵ دقیقه یک‌بار اجرا می‌شود
-  workflow_dispatch: # اجازه می‌دهد دستی هم اجرا کنی
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -19,8 +19,11 @@ jobs:
           python-version: '3.11'
           
       - name: Install dependencies
-        run: pip install requests beautifulsoup4
-        
+        run: |
+          pip install playwright
+          playwright install chromium
+          playwright install-deps
+          
       - name: Run script
         run: python update_weather.py
         
