@@ -1,67 +1,93 @@
-import requests
-from bs4 import BeautifulSoup
+import asyncio
 import json
 from datetime import datetime
+from playwright.async_api import async_playwright
 
-def fetch_tgju_prices():
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    
-    prices = {}
-    
-    try:
-        # --- 1. استخراج دلار و لیر از صفحه currency ---
-        url_currency = "https://www.tgju.org/currency"
-        response = requests.get(url_currency, headers=headers, timeout=15)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
+async def fetch_weather():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
         
-        # دلار (استفاده از data-market-row برای دقت بیشتر)
-        dollar_row = soup.find('tr', {'data-market-row': 'price_dollar_rl'})
-        if dollar_row:
-            dollar_td = dollar_row.find('td', class_='nf')
-            if dollar_td:
-                prices['dollar'] = dollar_td.text.strip()
-        
-        # لیر ترکیه
-        lira_row = soup.find('tr', {'data-market-row': 'price_try'})
-        if lira_row:
-            lira_td = lira_row.find('td', class_='nf')
-            if lira_td:
-                prices['lira'] = lira_td.text.strip()
-
-        # --- 2. استخراج طلای 18 عیار و سکه از صفحه اصلی ---
-        url_home = "https://www.tgju.org/"
-        response_home = requests.get(url_home, headers=headers, timeout=15)
-        response_home.raise_for_status()
-        soup_home = BeautifulSoup(response_home.text, 'html.parser')
-        
-        # طلای 18 عیار
-        gold_li = soup_home.find('li', id='l-geram18')
-        if gold_li:
-            gold_price_span = gold_li.find('span', class_='info-price')
-            if gold_price_span:
-                prices['gold18'] = gold_price_span.text.strip()
-        
-        # سکه
-        coin_li = soup_home.find('li', id='l-sekee')
-        if coin_li:
-            coin_price_span = coin_li.find('span', class_='info-price')
-            if coin_price_span:
-                prices['coin'] = coin_price_span.text.strip()
-        
-        prices['last_update'] = datetime.now().isoformat()
-        
-        # ذخیره در فایل JSON
-        with open('prices.json', 'w', encoding='utf-8') as f:
-            json.dump(prices, f, ensure_ascii=False, indent=2)
-        
-        print("قیمت‌ها با موفقیت استخراج و ذخیره شدند:", prices)
-        
-    except Exception as e:
-        print(f"خطا در استخراج قیمت‌ها: {e}")
-        raise
+        try:
+            print("در حال باز کردن سایت هواشناسی...")
+            # رفتن مستقیماً به آدرس گنبدکاووس با هش
+            await page.goto("https://www.golestanmet.ir/#gonbad-e-kavus", timeout=60000, wait_until="networkidle")
+            
+            # صبر برای رندر شدن اطلاعات
+            await page.wait_for_timeout(5000)
+            
+            weather_data = {}
+            
+            # 1. استخراج عنوان
+            headline_el = page.locator('.headline')
+            if await headline_el.count() > 0:
+                spans = headline_el.locator('span')
+                if await spans.count() >= 2:
+                    part1 = await spans.nth(0).inner_text()
+                    part2 = await spans.nth(1).inner_text()
+                    weather_data['headline'] = f"{part1.strip()} | {part2.strip()}"
+                else:
+                    weather_data['headline'] = (await headline_el.inner_text()).strip()
+            else:
+                weather_data['headline'] = "—"
+            
+            # 2. استخراج توضیحات (Lede)
+            lede_el = page.locator('.lede')
+            if await lede_el.count() > 0:
+                weather_data['lede'] = (await lede_el.inner_text()).strip()
+            else:
+                weather_data['lede'] = "—"
+            
+            # 3. دمای فعلی
+            temp_el = page.locator('#nowT, .now-t .num')
+            if await temp_el.count() > 0:
+                weather_data['temp'] = (await temp_el.first.inner_text()).strip()
+            else:
+                weather_data['temp'] = "0"
+            
+            # 4. احساس دما
+            feels_el = page.locator('#nowF')
+            if await feels_el.count() > 0:
+                weather_data['feelsLike'] = (await feels_el.inner_text()).strip()
+            else:
+                weather_data['feelsLike'] = "—"
+            
+            # 5. وضعیت هوا
+            cond_el = page.locator('#nowC')
+            if await cond_el.count() > 0:
+                weather_data['condition'] = (await cond_el.inner_text()).strip()
+            else:
+                weather_data['condition'] = "—"
+            
+            # 6. آدرس آیکون
+            icon_el = page.locator('#nowI')
+            if await icon_el.count() > 0:
+                src = await icon_el.get_attribute('src')
+                if src:
+                    if src.startswith('/'):
+                        weather_data['icon'] = f"https://www.golestanmet.ir{src}"
+                    elif not src.startswith('http'):
+                        weather_data['icon'] = f"https://www.golestanmet.ir/{src}"
+                    else:
+                        weather_data['icon'] = src
+                else:
+                    weather_data['icon'] = "https://www.golestanmet.ir/wp-content/plugins/glm-portal/site/icons/cloud.png"
+            else:
+                weather_data['icon'] = "https://www.golestanmet.ir/wp-content/plugins/glm-portal/site/icons/cloud.png"
+            
+            weather_data['last_update'] = datetime.now().isoformat()
+            
+            # ذخیره در فایل JSON
+            with open('weather.json', 'w', encoding='utf-8') as f:
+                json.dump(weather_data, f, ensure_ascii=False, indent=2)
+            
+            print("اطلاعات هوای گنبدکاووس با موفقیت استخراج شد:", weather_data)
+            
+        except Exception as e:
+            print(f"خطا در استخراج اطلاعات: {e}")
+            raise
+        finally:
+            await browser.close()
 
 if __name__ == "__main__":
-    fetch_tgju_prices()
+    asyncio.run(fetch_weather())
