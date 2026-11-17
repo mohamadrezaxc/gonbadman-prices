@@ -1,84 +1,82 @@
-import requests
-from bs4 import BeautifulSoup
+import asyncio
 import json
 from datetime import datetime
-import re
+from playwright.async_api import async_playwright
 
-def fetch_golestan_weather():
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
-    
-    url = "https://www.golestanmet.ir/"
-    weather_data = {}
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
+async def fetch_weather():
+    async with async_playwright() as p:
+        # اجرای مرورگر به صورت Headless (بدون رابط گرافیکی)
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
         
-        # ۱. استخراج عنوان (بر اساس کلاس headline)
-        headline_tag = soup.find(class_='headline')
-        if headline_tag:
-            spans = headline_tag.find_all('span')
-            if len(spans) >= 2:
-                weather_data['headline'] = f"{spans[0].text.strip()} | {spans[1].text.strip()}"
-            else:
-                weather_data['headline'] = headline_tag.text.strip()
-        else:
-             weather_data['headline'] = "آسمانی ابری | و هوای آرام"
-
-        # ۲. استخراج توضیحات (بر اساس کلاس lede)
-        lede_tag = soup.find(class_='lede')
-        if lede_tag:
-            weather_data['lede'] = lede_tag.text.strip()
-        else:
-             weather_data['lede'] = "دریافت اطلاعات با موفقیت انجام نشد."
-
-        # ۳. دمای فعلی (جستجو برای کلاس now-t و درون آن num)
-        now_t = soup.find(class_='now-t')
-        if now_t:
-            temp_span = now_t.find(class_='num')
-            if temp_span:
-                # فقط اعداد را نگه می‌داریم
-                temp_text = re.sub(r'[^\d۰-۹]', '', temp_span.text)
-                weather_data['temp'] = temp_text if temp_text else "۱۶"
-
-        # ۴. احساس دما
-        now_f = soup.find(id='nowF') or soup.find(class_='now-s').find(class_='num') if soup.find(class_='now-s') else None
-        if now_f:
-            weather_data['feelsLike'] = re.sub(r'[^\d۰-۹]', '', now_f.text)
-        
-        # ۵. وضعیت هوا
-        now_c = soup.find(id='nowC') or soup.find(class_='now-s').find('b') if soup.find(class_='now-s') else None
-        if now_c:
-            weather_data['condition'] = now_c.text.strip()
-
-        # ۶. آیکون
-        now_i = soup.find(id='nowI') or soup.find(class_='now-i')
-        if now_i and now_i.get('src'):
-            src = now_i['src']
-            if src.startswith('/'):
-                weather_data['icon'] = f"https://www.golestanmet.ir{src}"
-            elif not src.startswith('http'):
-                weather_data['icon'] = f"https://www.golestanmet.ir/{src}"
-            else:
-                weather_data['icon'] = src
-        else:
-             weather_data['icon'] = "https://www.golestanmet.ir/wp-content/plugins/glm-portal/site/icons/cloud.png"
-
-        # زمان به‌روزرسانی
-        weather_data['last_update'] = datetime.now().isoformat()
-        
-        # ذخیره در فایل
-        with open('weather.json', 'w', encoding='utf-8') as f:
-            json.dump(weather_data, f, ensure_ascii=False, indent=2)
-        
-        print("اطلاعات هوا با موفقیت استخراج شد:", weather_data)
-        
-    except Exception as e:
-        print(f"خطا در استخراج اطلاعات: {e}")
-        raise
+        try:
+            # رفتن به سایت و صبر کردن تا لود کامل شود
+            await page.goto("https://www.golestanmet.ir/", timeout=30000, wait_until="networkidle")
+            
+            # صبر برای اینکه عناصر اصلی حتماً لود شوند
+            await page.wait_for_timeout(5000)
+            
+            weather_data = {}
+            
+            # استخراج داده‌ها با استفاده از JavaScript درون صفحه
+            weather_data['headline'] = await page.evaluate('''
+                () => {
+                    const el = document.querySelector('.headline');
+                    if (!el) return "—";
+                    const spans = el.querySelectorAll('span');
+                    if (spans.length >= 2) return spans[0].innerText.trim() + " | " + spans[1].innerText.trim();
+                    return el.innerText.trim();
+                }
+            ''')
+            
+            weather_data['lede'] = await page.evaluate('''
+                () => {
+                    const el = document.querySelector('.lede');
+                    return el ? el.innerText.trim() : "در حال دریافت اطلاعات…";
+                }
+            ''')
+            
+            weather_data['temp'] = await page.evaluate('''
+                () => {
+                    const el = document.querySelector('#nowT') || document.querySelector('.now-t .num');
+                    return el ? el.innerText.trim() : "0";
+                }
+            ''')
+            
+            weather_data['feelsLike'] = await page.evaluate('''
+                () => {
+                    const el = document.querySelector('#nowF');
+                    return el ? el.innerText.trim() : "—";
+                }
+            ''')
+            
+            weather_data['condition'] = await page.evaluate('''
+                () => {
+                    const el = document.querySelector('#nowC');
+                    return el ? el.innerText.trim() : "—";
+                }
+            ''')
+            
+            weather_data['icon'] = await page.evaluate('''
+                () => {
+                    const el = document.querySelector('#nowI');
+                    return el ? el.src : "https://www.golestanmet.ir/wp-content/plugins/glm-portal/site/icons/cloud.png";
+                }
+            ''')
+            
+            weather_data['last_update'] = datetime.now().isoformat()
+            
+            # ذخیره در فایل JSON
+            with open('weather.json', 'w', encoding='utf-8') as f:
+                json.dump(weather_data, f, ensure_ascii=False, indent=2)
+            
+            print("اطلاعات هوا با موفقیت استخراج شد:", weather_data)
+            
+        except Exception as e:
+            print(f"خطا در استخراج اطلاعات: {e}")
+            raise
+        finally:
+            await browser.close()
 
 if __name__ == "__main__":
-    fetch_golestan_weather()
+    asyncio.run(fetch_weather())
